@@ -1,0 +1,187 @@
+---
+title: Analysis of NOAA Storm Data
+author: John ARNZEN
+output: 
+  html_document: 
+    highlight: zenburn
+    keep_md: yes
+---
+## Synopsis
+
+Our task for this assignment was to analyze the NOAA Storm Data database of the United States, looking for the types of weather events which most cause the most monetary damages to property and crops, and the weather events which cause the most fatalities and injuries.
+
+The data stretch from 1950 to 2011 with a wide variety of variations of data quality and number of observations through the years. Minimal attempts were made to clarify the data due to scope and time---this should be considered a first pass at an analysis.
+
+That said, we found that flooding and tornadoes were the most impactful culprits of the weather events across the US over the duration analyzed. Flooding caused the most property and crop damages, while tornadoes caused the most fatalities and injuries.
+
+## Data Processing
+
+```{r}
+## load the libraries we'll use to process the data
+library(data.table, warn.conflicts = FALSE)
+library(dplyr, warn.conflicts = FALSE)
+library(ggplot2, warn.conflicts = FALSE)
+```
+
+```{r, cache=TRUE}
+## read the compressed data into a data frame
+df_orig <- read.csv("StormData.csv.bz2")
+
+## check the structure of the data and review their column names
+str(df_orig)
+
+## quick summary of the data (mostly to identify columns with NAs 
+## and other anomolies)
+summary(df_orig)
+```
+
+```{r}
+## turn the data frame into a data table for faster & easier processing
+dt <- as.data.table(df_orig)
+```
+
+```{r}
+## what are the levels of EVTYPE?
+levels(dt$EVTYPE)
+```
+
+```{r}
+## any EVTYPE NAs?
+dt[is.na(EVTYPE), .N] ## .N = number of rows; provided by data.table
+```
+
+```{r}
+## trim and upcase the EVTYPEs to normalize and prepare to group them
+normalizeFactors <- function(f) factor(toupper(trimws(f)))
+dt$EVTYPE <- normalizeFactors(dt$EVTYPE)
+```
+
+```{r}
+## what are the most common events?
+events <- dt %>% 
+    group_by(EVTYPE) %>% 
+    tally(sort = TRUE)
+```
+
+```{r}
+## quick plot of the most common events
+qplot(x = reorder(EVTYPE, n), y = n, 
+      data = events[n >= mean(n)], 
+      geom="bar", stat="identity") + 
+    coord_flip()
+```
+
+**Figure #1**: Plot of most common weather events in the NOAA dataset
+
+```{r}
+## events compared and merged with the NOAA official events
+# noaa_events <- data.frame(EVENTS = toupper(trimws(readLines("NOAA-events.txt"))))
+noaa_events <- data.frame(EVENTS = factor(c("ASTRONOMICAL LOW TIDE", "AVALANCHE", "BLIZZARD", "COASTAL FLOOD", "COLD/WIND CHILL", "DEBRIS FLOW", "DENSE FOG", 
+"DENSE SMOKE", "DROUGHT", "DUST DEVIL", "DUST STORM", "EXCESSIVE HEAT", 
+"EXTREME COLD/WIND CHILL", "FLASH FLOOD", "FLOOD", "FREEZING FOG", 
+"FROST/FREEZE", "FUNNEL CLOUD", "HAIL", "HEAT", "HEAVY RAIN", 
+"HEAVY SNOW", "HIGH SURF", "HIGH WIND", "HURRICANE (TYPHOON)", 
+"ICE STORM", "LAKE-EFFECT SNOW", "LAKESHORE FLOOD", "LIGHTNING", 
+"MARINE HAIL", "MARINE HIGH WIND", "MARINE STRONG WIND", "MARINE THUNDERSTORM WIND", "RIP CURRENT", "SEICHE", "SLEET", "STORM SURGE/TIDE", "STRONG WIND", 
+"THUNDERSTORM WIND", "TORNADO", "TROPICAL DEPRESSION", "TROPICAL STORM", 
+"TSUNAMI", "VOLCANIC ASH", "WATERSPOUT", "WILDFIRE", "WINTER STORM", 
+"WINTER WEATHER")))
+
+dt_merged <- merge(events, noaa_events, by.x = "EVTYPE", by.y="EVENTS")
+```
+
+```{r}
+## quick plot of the official event counts
+# qplot(x = reorder(EVTYPE, n), y = n, 
+#       data = dt_merged, 
+#       geom="bar", stat="identity") + 
+#    coord_flip()
+```
+
+```{r}
+## check for NAs in the damage-related columns
+dt[is.na(PROPDMG) | is.na(CROPDMG), .N]
+dt[is.na(PROPDMGEXP) | is.na(CROPDMGEXP), .N]
+```
+
+```{r}
+## check the levels of the *EXP columns, looking for anomolies
+levels(dt$PROPDMGEXP)
+levels(dt$CROPDMGEXP)
+```
+
+```{r}
+## normalize the *EXP factors like we did for EVTYPE
+dt$PROPDMGEXP <- normalizeFactors(dt$PROPDMGEXP)
+dt$CROPDMGEXP <- normalizeFactors(dt$CROPDMGEXP)
+```
+
+```{r}
+## calculate the damages per event type
+expToValue <- function(exp) switch(as.character(exp), 
+                                   H = 100, 
+                                   K = 1000, 
+                                   M = 1e6, 
+                                   B = 1e9, 
+                                   1)
+
+damages <- dt[PROPDMG > 0 | CROPDMG > 0] %>% 
+    mutate(PROPDMGEXP_value = sapply(PROPDMGEXP, expToValue),
+           CROPDMGEXP_value = sapply(CROPDMGEXP, expToValue)) %>%
+    mutate(PROPDMG_value = PROPDMG * PROPDMGEXP_value,
+           CROPDMG_value = CROPDMG * CROPDMGEXP_value,
+           DMG_total = PROPDMG_value + CROPDMG_value) %>%
+    group_by(EVTYPE) %>%
+    summarise(total_damages = sum(DMG_total))
+
+## get a summary of the damages
+summary(damages)
+```
+
+```{r}
+## calculate the fatalites and injuries per event type
+lives <- dt[FATALITIES > 0 | INJURIES > 0] %>%
+    group_by(EVTYPE) %>%
+    summarise(total_fatalities = sum(FATALITIES),
+              total_injuries = sum(INJURIES)) %>%
+    mutate(total_lives = total_fatalities + total_injuries)
+
+## get a summary of the fatalities and injuries
+summary(lives)
+```
+
+## Results
+
+1. Across the United States, which types of events (as indicated in the `EVTYPE` variable) are most harmful with respect to population health?
+
+```{r}
+## quick plot of the top life-impacting events and their impacts
+qplot(x = reorder(EVTYPE, total_lives), y = total_lives, 
+      data = lives[total_lives >= mean(total_lives)],
+      geom = "bar", stat = "identity") +
+    coord_flip() +
+    labs(title = "Weather Events Causing the Most Fatalities & Injuries",
+         x = "Weather event",
+         y = "Total fatalities + injuries")
+```
+
+**Figure #2**: Plot of total fatalities & injuries by weather event
+
+We see that tornadoes caused the most fatalities and injuries by far, and that floods were the fourth cause of impacts to lives.
+
+2. Across the United States, which types of events have the greatest economic consequences?
+
+```{r}
+## quick plot of the top damage-causing events and their costs
+qplot(x = reorder(EVTYPE, total_damages), y = total_damages, 
+      data = damages[total_damages >= mean(total_damages)], 
+      geom = "bar", stat = "identity") + 
+    coord_flip() +
+    labs(title = "Weather Events Causing the Most Monetary Damages",
+         x = "Weather event",
+         y = "Total property + crop damages (in US$)")
+```
+
+**Figure #3**: Plot of total monetary damages by weather event
+
+We see that floods caused the most monetary damages to property and crops, and that tornadoes were the third most costly to property and crops.
